@@ -23,6 +23,7 @@ const port = 3000;
 app.use(cors({
     origin: [
         'http://localhost:3000', 
+        'http://localhost:8080', 
         'http://localhost:3001', 
         'http://localhost:5173', 
         'http://localhost:4200',
@@ -268,6 +269,176 @@ app.get('/files', async (req, res) => {
     }
 });
 
+// GET route to get available branches and divisions from uploaded data
+app.get('/api/branches-divisions', async (req, res) => {
+    try {
+        const uploadsPath = path.join(__dirname, 'uploads');
+        const allFiles = await fs.readdir(uploadsPath);
+        
+        const excelFiles = allFiles.filter(file => 
+            (file.endsWith('.xlsx') || file.endsWith('.xls')) && 
+            !file.startsWith('timetable_') // Exclude generated timetable files
+        );
+        
+        console.log('Found Excel files:', excelFiles);
+        
+        if (excelFiles.length === 0) {
+            return res.json({
+                success: true,
+                data: { branches: [], divisions: [], message: 'No Excel files uploaded yet' }
+            });
+        }
+        
+        const branchesSet = new Set();
+        const divisionsSet = new Set();
+        
+        // Try to extract from filename first (DS1_Dataset.xlsx pattern)
+        excelFiles.forEach(file => {
+            const match = file.match(/^([A-Za-z]+)(\d+)_Dataset\.(xlsx|xls)$/);
+            if (match) {
+                const branch = match[1]; // e.g., "DS"
+                const division = match[2]; // e.g., "1"
+                branchesSet.add(branch);
+                divisionsSet.add(division);
+                console.log(`Extracted from filename ${file}: Branch=${branch}, Division=${division}`);
+            }
+        });
+        
+        // If no data from filenames, try reading Excel content
+        if (branchesSet.size === 0 || divisionsSet.size === 0) {
+            const filePath = path.join(uploadsPath, excelFiles[0]);
+            const workbook = xlsx.readFile(filePath);
+            
+            // Check multiple sheets for branch/division data
+            const sheetsToCheck = ['Theory Courses', 'Lab Courses', 'Faculty', 'Batch Details'];
+            
+            for (const sheetName of sheetsToCheck) {
+                if (workbook.Sheets[sheetName]) {
+                    const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+                    console.log(`Checking sheet ${sheetName}, found ${data.length} rows`);
+                    
+                    data.forEach(row => {
+                        const branch = row.Branch || row.branch || row.BRANCH;
+                        const division = row.Division || row.division || row.DIVISION || row.Div;
+                        
+                        if (branch) {
+                            branchesSet.add(branch.toString());
+                            console.log(`Found branch in data: ${branch}`);
+                        }
+                        if (division) {
+                            divisionsSet.add(division.toString());
+                            console.log(`Found division in data: ${division}`);
+                        }
+                    });
+                }
+            }
+        }
+        
+        const branches = Array.from(branchesSet).sort();
+        const divisions = Array.from(divisionsSet).sort();
+        
+        console.log('Final branches:', branches);
+        console.log('Final divisions:', divisions);
+        
+        res.json({
+            success: true,
+            data: {
+                branches,
+                divisions,
+                availableFiles: excelFiles,
+                debug: {
+                    totalFiles: excelFiles.length,
+                    branchesFound: branches.length,
+                    divisionsFound: divisions.length
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error fetching branches/divisions:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch available branches and divisions: ' + error.message
+        });
+    }
+});
+
+// GET route to retrieve stored timetables
+app.get('/api/timetables', async (req, res) => {
+    try {
+        const { branch, division } = req.query;
+        const uploadsPath = path.join(__dirname, 'uploads');
+        
+        console.log('=== TIMETABLES API DEBUG ===');
+        console.log('Query params:', { branch, division });
+        console.log('Uploads path:', uploadsPath);
+        
+        const allFiles = await fs.readdir(uploadsPath);
+        console.log('All files in uploads:', allFiles);
+        
+        // Find timetable files
+        let timetableFiles = allFiles.filter(file => 
+            file.startsWith('timetable_') && file.endsWith('.json')
+        );
+        console.log('Timetable files found:', timetableFiles);
+        
+        // Filter by branch/division if specified
+        if (branch || division) {
+            const originalCount = timetableFiles.length;
+            timetableFiles = timetableFiles.filter(file => {
+                const matchesBranch = !branch || file.toLowerCase().includes(branch.toLowerCase());
+                const matchesDivision = !division || file.includes(division.toString());
+                console.log(`File ${file}: branch match=${matchesBranch}, division match=${matchesDivision}`);
+                return matchesBranch && matchesDivision;
+            });
+            console.log(`Filtered from ${originalCount} to ${timetableFiles.length} files`);
+        }
+        
+        const timetables = [];
+        
+        for (const file of timetableFiles) {
+            try {
+                const filePath = path.join(uploadsPath, file);
+                console.log(`Reading file: ${filePath}`);
+                const content = await fs.readFile(filePath, 'utf-8');
+                const timetableData = JSON.parse(content);
+                
+                console.log(`File ${file} contains:`, {
+                    branch: timetableData.branch,
+                    division: timetableData.division,
+                    hasRows: !!timetableData.timetable?.rows?.length
+                });
+                
+                timetables.push({
+                    filename: file,
+                    ...timetableData
+                });
+            } catch (readError) {
+                console.error(`Could not read timetable file ${file}:`, readError.message);
+            }
+        }
+        
+        // Sort by generation date (newest first)
+        timetables.sort((a, b) => new Date(b.generatedAt) - new Date(a.generatedAt));
+        
+        console.log(`Returning ${timetables.length} timetables`);
+        console.log('===========================');
+        
+        res.json({
+            success: true,
+            data: timetables
+        });
+        
+    } catch (error) {
+        console.error('Error fetching timetables:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch timetables: ' + error.message
+        });
+    }
+});
+
+
 // GET route to parse and return data from a specific file
 app.get('/parse/:filename', async (req, res) => {
     try {
@@ -380,74 +551,163 @@ app.delete('/files/:filename', async (req, res) => {
     }
 });
 
-// POST route to trigger timetable generation
+// POST route to generate timetable for specific branch/division
 app.post('/generate', async (req, res) => {
     try {
+        const { branch, division, year, theoryDuration, labDuration, shortBreaks, longBreaks } = req.body;
+        
+        console.log('Generate request received:', { branch, division, year });
+        
         const uploadsPath = path.join(__dirname, 'uploads');
         const allFiles = await fs.readdir(uploadsPath);
 
-        // Dynamically find all files matching the DS*_Dataset.xlsx pattern
-        const divisionFiles = allFiles.filter(file => /^DS\d+_Dataset\.xlsx$/.test(file));
+        let filePath = null;
 
-        if (divisionFiles.length === 0) {
-            throw new Error("No division data files found in the 'uploads' folder. Please upload files named like 'DS1_Dataset.xlsx', 'DS2_Dataset.xlsx', etc.");
+        // Method 1: Look for specific branch-division file (like DS1_Dataset.xlsx)
+        const specificFile = allFiles.find(file => {
+            const fileName = file.toLowerCase();
+            return (
+                fileName.includes(branch?.toLowerCase() || '') && 
+                fileName.includes(division?.toLowerCase() || '') &&
+                (fileName.endsWith('.xlsx') || fileName.endsWith('.xls'))
+            );
+        });
+
+        if (specificFile) {
+            filePath = path.join(uploadsPath, specificFile);
+            console.log(`Found specific file: ${specificFile}`);
+        } else {
+            // Method 2: Look for any Excel file and filter data from it
+            const excelFiles = allFiles.filter(file => 
+                (file.endsWith('.xlsx') || file.endsWith('.xls')) && 
+                !file.startsWith('timetable_')
+            );
+            
+            if (excelFiles.length === 0) {
+                throw new Error("No Excel files found in uploads folder. Please upload data first.");
+            }
+            
+            // Use the first Excel file and filter data from it
+            filePath = path.join(uploadsPath, excelFiles[0]);
+            console.log(`Using file: ${excelFiles[0]} and will filter data`);
         }
-        
-        console.log(`Found ${divisionFiles.length} division files to process:`, divisionFiles);
 
-        // Initialize master arrays to hold combined data from all divisions
-        let allTheoryCourses = [], allLabCourses = [], allFaculty = [], allLoadDist = [], allBatches = [], allVenues = [];
+        // Read and parse the Excel file
+        const workbook = xlsx.readFile(filePath);
+        console.log('Available sheets:', workbook.SheetNames);
 
-        // Helper function to safely read a sheet and throw a clear error if it's missing.
-        const getSheetData = (workbook, sheetName, division) => {
+        // Helper function to safely read a sheet
+        const getSheetData = (sheetName) => {
             const sheet = workbook.Sheets[sheetName];
             if (!sheet) {
-                throw new Error(`The sheet named "${sheetName}" was not found for Division ${division}. Please check the file. The available sheets are: [${workbook.SheetNames.join(", ")}]`);
+                console.log(`Sheet ${sheetName} not found`);
+                return [];
             }
             return xlsx.utils.sheet_to_json(sheet);
         };
 
-        // Loop through each found division file and aggregate its data
-        for (const file of divisionFiles) {
-            const filePath = path.join(uploadsPath, file);
-            const divisionMatch = file.match(/^DS(\d+)_Dataset\.xlsx$/);
-            const division = parseInt(divisionMatch[1]);
+        // Extract data from sheets
+        let theoryCourses = getSheetData('Theory Courses');
+        let labCourses = getSheetData('Lab Courses');
+        let faculty = getSheetData('Faculty');
+        let loadDist = getSheetData('Load Dist');
+        let batches = getSheetData('Batch Details');
+        let venues = getSheetData('Venue');
 
-            console.log(`Processing Division ${division} from ${file}...`);
-            const workbook = xlsx.readFile(filePath);
+        // Filter data by branch and division if they exist in the data
+        if (branch && division) {
+            const filterByBranchDiv = (data) => {
+                return data.filter(item => {
+                    const itemBranch = item.Branch || item.branch || '';
+                    const itemDivision = item.Division || item.division || '';
+                    
+                    return (
+                        itemBranch.toString().toLowerCase().includes(branch.toLowerCase()) &&
+                        itemDivision.toString().toLowerCase().includes(division.toLowerCase())
+                    );
+                });
+            };
 
-            // Extract and tag data with its division number
-            allTheoryCourses.push(...getSheetData(workbook, 'Theory Courses', division).map(course => ({ ...course, division })));
-            allLabCourses.push(...getSheetData(workbook, 'Lab Courses', division).map(course => ({ ...course, division })));
-            allFaculty.push(...getSheetData(workbook, 'Faculty', division).map(f => ({ ...f, division })));
-            allLoadDist.push(...getSheetData(workbook, 'Load Dist', division).map(load => ({ ...load, division })));
-            allBatches.push(...getSheetData(workbook, 'Batch Details', division).map(batch => ({ ...batch, division })));
-            
-            // Venues are a shared resource, so we only need to read them once from the first file.
-            if (allVenues.length === 0) {
-                allVenues = getSheetData(workbook, 'Venue', division);
-            }
+            theoryCourses = filterByBranchDiv(theoryCourses);
+            labCourses = filterByBranchDiv(labCourses);
+            faculty = filterByBranchDiv(faculty);
+            loadDist = filterByBranchDiv(loadDist);
+            batches = filterByBranchDiv(batches);
+            // Venues are usually shared, so don't filter them
         }
 
-        // Generate the timetable using the new, fully combined data structure
-        const generatedTimetable = await generateTimetableWithGemini({
-            theoryCourses: allTheoryCourses,
-            labCourses: allLabCourses,
-            faculty: allFaculty,
-            loadDist: allLoadDist,
-            venues: allVenues,
-            batches: allBatches,
-            divisionCount: divisionFiles.length
+        console.log(`Filtered data counts:`, {
+            theoryCourses: theoryCourses.length,
+            labCourses: labCourses.length,
+            faculty: faculty.length,
+            batches: batches.length
         });
-        
-        // Parse the Markdown table response from Gemini
+
+        if (theoryCourses.length === 0 && labCourses.length === 0) {
+            throw new Error(`No data found for branch: ${branch}, division: ${division}. Please check your data.`);
+        }
+
+        // Prepare data for timetable generation
+        const timetableData = {
+            theoryCourses: theoryCourses.map(course => ({ ...course, division: division })),
+            labCourses: labCourses.map(course => ({ ...course, division: division })),
+            faculty: faculty.map(f => ({ ...f, division: division })),
+            loadDist: loadDist.map(load => ({ ...load, division: division })),
+            venues: venues,
+            batches: batches.map(batch => ({ ...batch, division: division })),
+            divisionCount: 1,
+            branch: branch,
+            division: division,
+            constraints: {
+                theoryDuration: theoryDuration || 60,
+                labDuration: labDuration || 120,
+                shortBreaks: shortBreaks || 2,
+                longBreaks: longBreaks || 1
+            }
+        };
+
+        // Generate the timetable using Gemini AI
+        const generatedTimetable = await generateTimetableWithGemini(timetableData);
         const parsedTable = parseMarkdownTable(generatedTimetable);
 
-        res.render('result', { timetable: parsedTable, error: null });
+        // Store the generated timetable (optional - for future retrieval)
+        const timetableFile = `timetable_${branch}_${division}_${Date.now()}.json`;
+        const timetableData_store = {
+            branch,
+            division,
+            year,
+            generatedAt: new Date().toISOString(),
+            timetable: parsedTable
+        };
+        
+        try {
+            await fs.writeFile(
+                path.join(uploadsPath, timetableFile), 
+                JSON.stringify(timetableData_store, null, 2)
+            );
+            console.log(`Timetable saved as: ${timetableFile}`);
+        } catch (saveError) {
+            console.log('Could not save timetable file:', saveError.message);
+        }
+
+        // Return JSON response instead of rendering (for API usage)
+        res.json({
+            success: true,
+            data: {
+                branch,
+                division,
+                year,
+                timetable: parsedTable,
+                generatedAt: new Date().toISOString()
+            }
+        });
 
     } catch (error) {
-        console.error('An error occurred during timetable generation:', error);
-        res.render('result', { timetable: null, error: error.message || 'An unknown error occurred.' });
+        console.error('Timetable generation error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'An unknown error occurred during timetable generation.'
+        });
     }
 });
 
@@ -478,26 +738,22 @@ async function generateTimetableWithGemini(allData) {
     `;
 
     const prompt = `
-        You are an expert university scheduler creating a combined, collision-free timetable for ${allData.divisionCount} separate first-year B.Tech divisions.
-        Your task is to create a single, unified 5-day (Monday to Friday) school week timetable that includes classes for all divisions.
+        You are an expert university scheduler creating a timetable for ${allData.branch} branch, Division ${allData.division}.
+        Your task is to create a 5-day (Monday to Friday) school week timetable.
         The time slots are: 9:00-10:00, 10:00-11:00, 11:00-12:00, 12:00-1:00, (1:00-2:00 LUNCH), 2:00-3:00, 3:00-4:00, 4:00-5:00.
 
-        Faculty and Venues are shared resources between all divisions.
-
-        Here is the combined data for all divisions. Each item has a "division" field indicating which division it belongs to.
+        Here is the data for this specific branch and division:
         ${dataString}
 
-        You must follow these constraints strictly for the COMBINED timetable:
-        1.  **Faculty Collision:** A faculty member CANNOT be scheduled in two different places (for any division) at the same time.
-        2.  **Venue Collision:** A venue CANNOT be used for two different classes (from any division) at the same time.
-        3.  **Student Collision:** A student batch from one division cannot have a schedule conflict.
-        4.  **Workload Fulfillment:** The total scheduled hours for each course for each division must match its 'Total' hours from the 'Weekly Load Distribution' data.
-        5.  **Use the "division" tag:** When scheduling a course or batch, you MUST use the "division" field from the data to correctly assign it. For example, Batches 11-14 are for division 1, and Batches 21-24 are for division 2.
-        6.  **Lunch Break:** 1:00 PM to 2:00 PM is always the LUNCH break for everyone.
+        You must follow these constraints strictly:
+        1. **Faculty Collision:** A faculty member CANNOT be scheduled in two different places at the same time.
+        2. **Venue Collision:** A venue CANNOT be used for two different classes at the same time.
+        3. **Student Collision:** A student batch cannot have a schedule conflict.
+        4. **Workload Fulfillment:** The total scheduled hours for each course must match the 'Total' hours from the 'Weekly Load Distribution' data.
+        5. **Lunch Break:** 1:00 PM to 2:00 PM is always the LUNCH break for everyone.
 
-        Provide the final combined timetable in a single, clean Markdown table.
-        The table MUST have columns: 'Day', 'Time', 'Division', 'Class/Batch', 'Course Name', 'Faculty', 'Venue'.
-        The 'Division' column is the most important part of the output and MUST be populated with the correct division number for every single class. Do not omit this column.
+        Provide the final timetable in a single, clean Markdown table.
+        The table MUST have columns: 'Day', 'Time', 'Class/Batch', 'Course Name', 'Faculty', 'Venue'.
     `;
 
     try {
