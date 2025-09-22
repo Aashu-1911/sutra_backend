@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Generated Timetable</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-50 text-gray-800">
+    <div class="container mx-auto px-4 py-8 max-w-7xl">
+      <header class="text-center mb-10">
+        <h1 class="text-4xl font-bold text-gray-900">Generated Timetable</h1>
+        <a href="/" class="text-blue-600 hover:underline mt-2 inline-block"
+          >&larr; Go Back and Generate Again</a
+        >
+      </header>
+
+      <% if (error) { %>
+      <div
+        class="mt-8 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative max-w-3xl mx-auto"
+        role="alert"
+      >
+        <strong class="font-bold">An Error Occurred!</strong>
+        <span class="block sm:inline"><%= error %></span>
+      </div>
+      <% } %> <% if (timetable && timetable.rows && timetable.rows.length > 0) {
+      %>
+      <div
+        class="bg-white p-6 md:p-8 rounded-xl shadow-md border border-gray-200"
+      >
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+              <tr>
+                <% timetable.headers.forEach(header => { %>
+                <th
+                  scope="col"
+                  class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  <%= header %>
+                </th>
+                <% }) %>
+              </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+              <% timetable.rows.forEach(row => { %> <% if (row.length > 0 &&
+              row.join('').trim() !== '') { %>
+              <tr>
+                <% row.forEach(cell => { %>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                  <%= cell %>
+                </td>
+                <% }) %>
+              </tr>
+              <% } %> <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <% } else if (!error) { %>
+      <div
+        class="mt-8 bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded-lg relative max-w-3xl mx-auto"
+        role="alert"
+      >
+        <strong class="font-bold">No Timetable Generated.</strong>
+        <span class="block sm:inline"
+          >The AI model did not return a valid timetable. You can try generating
+          it again.</span
+        >
+      </div>
+      <% } %>
+    </div>
+  </body>
+</html>
